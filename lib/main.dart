@@ -1,43 +1,75 @@
 import 'dart:convert';
+import 'dart:ffi';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_blue/flutter_blue.dart';
 
-void main() => runApp(MyApp());
+void main() => runApp(WeatherStationApp());
 
-class MyApp extends StatelessWidget {
+class WeatherStationApp extends StatelessWidget {
   @override
-  Widget build(BuildContext context) => MaterialApp(
-        title: 'BLE Demo',
-        theme: ThemeData(
-          primarySwatch: Colors.blue,
-        ),
-        home: MyHomePage(title: 'Flutter BLE Demo'),
-      );
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'BLE Weather Station',
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+      ),
+      home: WeatherPage(title: 'Weather'),
+    );
+  }
 }
 
-class MyHomePage extends StatefulWidget {
-  MyHomePage({Key key, this.title}) : super(key: key);
+class WeatherPage extends StatefulWidget {
+  WeatherPage({Key key, this.title}) : super(key: key);
 
   final String title;
   final FlutterBlue flutterBlue = FlutterBlue.instance;
-  final List<BluetoothDevice> devicesList = new List<BluetoothDevice>();
-  final Map<Guid, List<int>> readValues = new Map<Guid, List<int>>();
+  final Map<DeviceIdentifier, BluetoothDevice> devicesList = {};
+  final WeatherState weather = new WeatherState();
+  final Map<String, Guid> guidMap = {
+    'weather_att': Guid('0000181a-0000-1000-8000-00805f9b34fb'),
+    'temp_char': Guid('00002a6e-0000-1000-8000-00805f9b34fb'),
+    'press_char': Guid('00002a6d-0000-1000-8000-00805f9b34fb'),
+    'humid_char': Guid('00002a6f-0000-1000-8000-00805f9b34fb'),
+  };
+  final DeviceIdentifier WeatherStationMAC =
+      DeviceIdentifier("EB:B4:21:FD:7C:BE");
 
   @override
-  _MyHomePageState createState() => _MyHomePageState();
+  _WeatherPageState createState() => _WeatherPageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  final _writeController = TextEditingController();
+class _WeatherPageState extends State<WeatherPage> {
   BluetoothDevice _connectedDevice;
+  String _deviceStatus = "Not Connected";
   List<BluetoothService> _services;
 
   _addDeviceTolist(final BluetoothDevice device) {
-    if (!widget.devicesList.contains(device)) {
+    if (!widget.devicesList.containsKey(device.id)) {
       setState(() {
-        widget.devicesList.add(device);
+        widget.devicesList[device.id] = device;
       });
+    }
+  }
+
+  int byteListToInt(List value) {
+    Uint8List byteList = Uint8List.fromList(value);
+    ByteData byteData = ByteData.sublistView(byteList);
+    int len = byteData.lengthInBytes;
+    switch (len) {
+      case 2:
+        {
+          return byteData.getInt16(0, Endian.little);
+        }
+      case 4:
+        {
+          return byteData.getUint32(0, Endian.little);
+        }
+      default:
+        {
+          return 0;
+        }
     }
   }
 
@@ -59,222 +91,193 @@ class _MyHomePageState extends State<MyHomePage> {
     widget.flutterBlue.startScan();
   }
 
-  ListView _buildListViewOfDevices() {
-    List<Container> containers = new List<Container>();
-    for (BluetoothDevice device in widget.devicesList) {
-      containers.add(
-        Container(
-          height: 50,
-          child: Row(
-            children: <Widget>[
-              Expanded(
-                child: Column(
-                  children: <Widget>[
-                    Text(device.name == '' ? '(unknown device)' : device.name),
-                    Text(device.id.toString()),
-                  ],
-                ),
-              ),
-              FlatButton(
-                color: Colors.blue,
-                child: Text(
-                  'Connect',
-                  style: TextStyle(color: Colors.white),
-                ),
-                onPressed: () async {
-                  widget.flutterBlue.stopScan();
-                  try {
-                    await device.connect();
-                  } catch (e) {
-                    if (e.code != 'already_connected') {
-                      throw e;
-                    }
-                  } finally {
-                    _services = await device.discoverServices();
-                  }
-                  setState(() {
-                    _connectedDevice = device;
-                  });
-                },
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    return ListView(
-      padding: const EdgeInsets.all(8),
-      children: <Widget>[
-        ...containers,
-      ],
-    );
-  }
-
-  List<ButtonTheme> _buildReadWriteNotifyButton(
-      BluetoothCharacteristic characteristic) {
-    List<ButtonTheme> buttons = new List<ButtonTheme>();
-
-    if (characteristic.properties.read) {
-      buttons.add(
-        ButtonTheme(
-          minWidth: 10,
-          height: 20,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: RaisedButton(
-              color: Colors.blue,
-              child: Text('READ', style: TextStyle(color: Colors.white)),
-              onPressed: () async {
-                var sub = characteristic.value.listen((value) {
-                  setState(() {
-                    widget.readValues[characteristic.uuid] = value;
-                  });
-                });
-                await characteristic.read();
-                sub.cancel();
-              },
-            ),
-          ),
-        ),
-      );
-    }
-    if (characteristic.properties.write) {
-      buttons.add(
-        ButtonTheme(
-          minWidth: 10,
-          height: 20,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: RaisedButton(
-              child: Text('WRITE', style: TextStyle(color: Colors.white)),
-              onPressed: () async {
-                await showDialog(
-                    context: context,
-                    builder: (BuildContext context) {
-                      return AlertDialog(
-                        title: Text("Write"),
-                        content: Row(
-                          children: <Widget>[
-                            Expanded(
-                              child: TextField(
-                                controller: _writeController,
-                              ),
-                            ),
-                          ],
-                        ),
-                        actions: <Widget>[
-                          FlatButton(
-                            child: Text("Send"),
-                            onPressed: () {
-                              characteristic.write(
-                                  utf8.encode(_writeController.value.text));
-                              Navigator.pop(context);
-                            },
-                          ),
-                          FlatButton(
-                            child: Text("Cancel"),
-                            onPressed: () {
-                              Navigator.pop(context);
-                            },
-                          ),
-                        ],
-                      );
-                    });
-              },
-            ),
-          ),
-        ),
-      );
-    }
-    if (characteristic.properties.notify) {
-      buttons.add(
-        ButtonTheme(
-          minWidth: 10,
-          height: 20,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: RaisedButton(
-              child: Text('NOTIFY', style: TextStyle(color: Colors.white)),
-              onPressed: () async {
-                characteristic.value.listen((value) {
-                  widget.readValues[characteristic.uuid] = value;
-                });
-                await characteristic.setNotifyValue(true);
-              },
-            ),
-          ),
-        ),
-      );
-    }
-
-    return buttons;
-  }
-
-  ListView _buildConnectDeviceView() {
-    List<Container> containers = new List<Container>();
-
-    for (BluetoothService service in _services) {
-      List<Widget> characteristicsWidget = new List<Widget>();
-
-      for (BluetoothCharacteristic characteristic in service.characteristics) {
-        characteristicsWidget.add(
-          Align(
-            alignment: Alignment.centerLeft,
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.title),
+      ),
+      body: Column(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          // connection button
+          Container(
+            padding: const EdgeInsets.all(32),
             child: Column(
-              children: <Widget>[
-                Row(
-                  children: <Widget>[
-                    Text(characteristic.uuid.toString(),
-                        style: TextStyle(fontWeight: FontWeight.bold)),
-                  ],
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                ElevatedButton(
+                  onPressed: () async {
+                    widget.flutterBlue.stopScan();
+                    debugPrint(widget.devicesList.toString());
+                    BluetoothDevice device =
+                        widget.devicesList[widget.WeatherStationMAC];
+                    debugPrint(device.name);
+                    try {
+                      await device.connect();
+                    } catch (e) {
+                      if (e.code != 'already_connected') {
+                        throw e;
+                      }
+                    } finally {
+                      _services = await device.discoverServices();
+                    }
+                    debugPrint("Device Connected");
+                    setState(() {
+                      _connectedDevice = device;
+                      _deviceStatus = "Connected";
+                    });
+                  },
+                  child: Text("Connect"),
                 ),
                 Row(
-                  children: <Widget>[
-                    ..._buildReadWriteNotifyButton(characteristic),
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text("Weather Station Status: "),
+                    Text(
+                      _deviceStatus.toString(),
+                    )
                   ],
-                ),
-                Row(
-                  children: <Widget>[
-                    Text('Value: ' +
-                        widget.readValues[characteristic.uuid].toString()),
-                  ],
-                ),
-                Divider(),
+                )
               ],
             ),
           ),
-        );
-      }
-      containers.add(
-        Container(
-          child: ExpansionTile(
-              title: Text(service.uuid.toString()),
-              children: characteristicsWidget),
-        ),
-      );
-    }
-
-    return ListView(
-      padding: const EdgeInsets.all(8),
-      children: <Widget>[
-        ...containers,
-      ],
+          // weather data section
+          Expanded(
+            child: ListView(
+              scrollDirection: Axis.vertical,
+              padding: const EdgeInsets.all(32),
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      child: Text("Temperature:"),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      child: Text(
+                          widget.weather.temperatureF.toStringAsFixed(1) +
+                              " " +
+                              String.fromCharCode(0x00B0) +
+                              "F"),
+                    ),
+                  ],
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      child: Text("Pressure:"),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      child: Text(
+                          widget.weather.pressureInHg.toStringAsFixed(3) +
+                              " in Hg"),
+                    ),
+                  ],
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      child: Text("Humidity:"),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      child: Text(
+                          widget.weather.humidityPercent.toStringAsFixed(2) +
+                              "%"),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          // sample button
+          Container(
+            padding: const EdgeInsets.all(32),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                ElevatedButton(
+                  onPressed: () async {
+                    int temp = 0, press = 0, humid = 0;
+                    for (BluetoothService s in _services) {
+                      for (BluetoothCharacteristic c in s.characteristics) {
+                        if (c.uuid == widget.guidMap['temp_char']) {
+                          // temperature
+                          var sub = c.value.listen((v) {
+                            temp = byteListToInt(v);
+                          });
+                          await c.read();
+                          sub.cancel();
+                        } else if (c.uuid == widget.guidMap['press_char']) {
+                          // pressure
+                          var sub = c.value.listen((v) {
+                            press = byteListToInt(v);
+                          });
+                          await c.read();
+                          sub.cancel();
+                        } else if (c.uuid == widget.guidMap['humid_char']) {
+                          // humidity
+                          var sub = c.value.listen((v) {
+                            humid = byteListToInt(v);
+                          });
+                          await c.read();
+                          sub.cancel();
+                        }
+                      }
+                    }
+                    setState(() {
+                      widget.weather.updateWeather(temp, press, humid);
+                    });
+                  },
+                  child: Text("Sample"),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
+}
 
-  ListView _buildView() {
-    if (_connectedDevice != null) {
-      return _buildConnectDeviceView();
-    }
-    return _buildListViewOfDevices();
+// storage and calculation of weather properties
+class WeatherState {
+  // output weather values
+  double pressureInHg = 0.0;
+  double temperatureF = 0.0;
+  double humidityPercent = 0.0;
+
+  // class constructor
+  WeatherState();
+
+  // update weather state based on a measurement
+  void updateWeather(int temp, int press, int humid) {
+    // convert raw weather measurement values to doubles
+    double tempD = temp / 100.0;
+    double pressD = press / 10.0;
+    double humidD = humid / 100.0;
+
+    // convert weather to useful quantities
+    this.temperatureF = tempCToF(tempD);
+    this.pressureInHg = pressPatoInHg(pressD);
+    this.humidityPercent = humidD;
   }
 
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(
-          title: Text(widget.title),
-        ),
-        body: _buildView(),
-      );
+  // convert temp in C to temp in F
+  double tempCToF(double temp) {
+    return 9 / 5 * temp + 32;
+  }
+
+  // convert pressure from Pa to mmHg
+  double pressPatoInHg(double press) {
+    return press / 3386.3886666667;
+  }
 }
