@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:typed_data';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_blue/flutter_blue.dart';
@@ -110,23 +111,53 @@ class _WeatherPageState extends State<WeatherPage> {
                   onPressed: () async {
                     widget.flutterBlue.stopScan();
                     debugPrint(widget.devicesList.toString());
-                    BluetoothDevice device =
-                        widget.devicesList[widget.WeatherStationMAC];
-                    debugPrint(device.name);
-                    try {
-                      await device.connect();
-                    } catch (e) {
-                      if (e.code != 'already_connected') {
-                        throw e;
+                    if (widget.devicesList
+                        .containsKey(widget.WeatherStationMAC)) {
+                      BluetoothDevice device =
+                          widget.devicesList[widget.WeatherStationMAC];
+                      debugPrint(device.name);
+                      try {
+                        await device.connect();
+                      } catch (e) {
+                        if (e.code != 'already_connected') {
+                          throw e;
+                        }
+                      } finally {
+                        _services = await device.discoverServices();
                       }
-                    } finally {
-                      _services = await device.discoverServices();
+                      debugPrint("Device Connected");
+                      setState(() {
+                        _connectedDevice = device;
+                        _deviceStatus = "Connected";
+                      });
+                    } else {
+                      debugPrint("Device not found");
+                      await showDialog(
+                          context: context,
+                          builder: (BuildContext context) {
+                            return AlertDialog(
+                              title: Text("Device Not Found"),
+                              actions: <Widget>[
+                                TextButton(
+                                  child: Text('Ok'),
+                                  onPressed: () {
+                                    Navigator.of(context).pop();
+                                  },
+                                ),
+                              ],
+                              content: Center(
+                                child: Text(
+                                    "The device could not be found, please make sure it is powered on and within range."),
+                              ),
+                              insetPadding: EdgeInsets.symmetric(
+                                  vertical: 220, horizontal: 60),
+                            );
+                          });
+                      widget.flutterBlue.startScan();
+                      setState(() {
+                        _deviceStatus = "Not Found";
+                      });
                     }
-                    debugPrint("Device Connected");
-                    setState(() {
-                      _connectedDevice = device;
-                      _deviceStatus = "Connected";
-                    });
                   },
                   child: Text("Connect"),
                 ),
@@ -195,6 +226,50 @@ class _WeatherPageState extends State<WeatherPage> {
                     ),
                   ],
                 ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      child: Text("Density Altitude:"),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      child: Text(
+                          widget.weather.densityAltitude.toStringAsFixed(1) +
+                              " ft"),
+                    ),
+                  ],
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      child: Text("Water Vapor Partial Pressure:"),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      child: Text(widget.weather.waterVaporPartialPressureTorr
+                              .toStringAsFixed(2) +
+                          " Torr"),
+                    ),
+                  ],
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      child: Text("Correction Factor:"),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      child: Text(
+                          widget.weather.correctionFactor.toStringAsFixed(4)),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -254,6 +329,11 @@ class WeatherState {
   double pressureInHg = 0.0;
   double temperatureF = 0.0;
   double humidityPercent = 0.0;
+  double densityAltitude = 0.0;
+  double pressureBar = 0.0;
+  double waterVaporPartialPressureBar = 0.0;
+  double correctionFactor = 0.0;
+  double waterVaporPartialPressureTorr = 0.0;
 
   // class constructor
   WeatherState();
@@ -269,6 +349,15 @@ class WeatherState {
     this.temperatureF = tempCToF(tempD);
     this.pressureInHg = pressPatoInHg(pressD);
     this.humidityPercent = humidD;
+    this.densityAltitude =
+        densityAltitudeNWS(this.pressureInHg, this.temperatureF);
+    this.pressureBar = pressPaToBar(pressD);
+    this.waterVaporPartialPressureBar =
+        calcWaterVaporPartialPressureBar(humidD, tempD);
+    this.waterVaporPartialPressureTorr =
+        pressBarToTorr(this.waterVaporPartialPressureBar);
+    this.correctionFactor = correctionFactorSAE(
+        this.pressureBar, this.waterVaporPartialPressureBar, tempD);
   }
 
   // convert temp in C to temp in F
@@ -279,5 +368,55 @@ class WeatherState {
   // convert pressure from Pa to mmHg
   double pressPatoInHg(double press) {
     return press / 3386.3886666667;
+  }
+
+  // convert pressure from Pa to bar
+  double pressPaToBar(double press) {
+    return press / 100000;
+  }
+
+  double pressBarToTorr(double press) {
+    return press * 750.062;
+  }
+
+  // water vapor pressure (temp in deg C), output in Pa
+  double vaporPressure(double temp) {
+    if (temp < 5) {
+      return 1000 * ((0.8726 - 0.6113) / (5 - 0) * (temp - 0) + 0.6113);
+    } else if (temp < 10) {
+      return 1000 * ((1.2281 - 0.8726) / (10 - 5) * (temp - 5) + 0.8726);
+    } else if (temp < 15) {
+      return 1000 * ((1.7056 - 1.2281) / (15 - 10) * (temp - 10) + 1.2281);
+    } else if (temp < 20) {
+      return 1000 * ((2.3388 - 1.7056) / (20 - 15) * (temp - 15) + 1.7056);
+    } else if (temp < 25) {
+      return 1000 * ((3.1690 - 2.3388) / (25 - 20) * (temp - 20) + 2.3388);
+    } else if (temp < 30) {
+      return 1000 * ((4.2455 - 3.1690) / (30 - 25) * (temp - 25) + 3.1690);
+    } else if (temp < 35) {
+      return 1000 * ((5.6267 - 4.2455) / (35 - 30) * (temp - 30) + 4.2455);
+    } else if (temp < 40) {
+      return 1000 * ((7.3814 - 5.6267) / (40 - 35) * (temp - 35) + 5.6267);
+    } else {
+      return 1000 * ((7.3814 - 7.3814) / (45 - 40) * (temp - 40) + 7.3814);
+    }
+  }
+
+  // water vapor partial pressure
+  double calcWaterVaporPartialPressureBar(double humid, double temp) {
+    return humid / 100 * vaporPressure(temp) / 100000;
+  }
+
+  // density altitude calculation according to the NWS (Wikipedia article on Density Altitude)
+  double densityAltitudeNWS(double press, double temp) {
+    return 145442.16 * (1 - (pow((17.326 * press) / (459.67 + temp), 0.235)));
+  }
+
+  // correction factor SAE J 1249 (taken from https://www.scielo.br/pdf/jbsmse/v25n3/a10v25n3.pdf)
+  // p: pressure in bar
+  // pv: water vapor partial pressure
+  // T: temp in C
+  double correctionFactorSAE(double p, double pv, double temp) {
+    return ((p - pv) / (0.990 - 0.013)) * pow(302.4 / (temp + 273.15), 0.5);
   }
 }
