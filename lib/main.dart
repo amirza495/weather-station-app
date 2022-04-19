@@ -5,6 +5,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_blue/flutter_blue.dart';
+import 'dart:developer' as developer;
 
 void main() => runApp(WeatherStationApp());
 
@@ -245,11 +246,13 @@ class _WeatherPageState extends State<WeatherPage> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Container(
-                      padding: const EdgeInsets.all(8),
-                      child: Text("Water Vapor Partial Pressure:"),
+                      padding: const EdgeInsets.only(
+                          top: 8, bottom: 8, left: 2, right: 2),
+                      child: Text("Water Vapor Pressure:"),
                     ),
                     Container(
-                      padding: const EdgeInsets.all(8),
+                      padding: const EdgeInsets.only(
+                          top: 8, bottom: 8, left: 2, right: 2),
                       child: Text(widget.weather.waterVaporPartialPressureTorr
                               .toStringAsFixed(2) +
                           " Torr"),
@@ -260,11 +263,13 @@ class _WeatherPageState extends State<WeatherPage> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Container(
-                      padding: const EdgeInsets.all(8),
-                      child: Text("Correction Factor:"),
+                      padding: const EdgeInsets.only(
+                          top: 8, bottom: 8, left: 2, right: 2),
+                      child: Text("Correction Factor (SAE J1349):"),
                     ),
                     Container(
-                      padding: const EdgeInsets.all(8),
+                      padding: const EdgeInsets.only(
+                          top: 8, bottom: 8, left: 2, right: 2),
                       child: Text(
                           widget.weather.correctionFactor.toStringAsFixed(4)),
                     ),
@@ -356,8 +361,11 @@ class WeatherState {
         calcWaterVaporPartialPressureBar(humidD, tempD);
     this.waterVaporPartialPressureTorr =
         pressBarToTorr(this.waterVaporPartialPressureBar);
-    this.correctionFactor = correctionFactorSAE(
+    this.correctionFactor = correctionFactorSAEJ1349(
         this.pressureBar, this.waterVaporPartialPressureBar, tempD);
+
+    developer
+        .log("correction factor: " + this.correctionFactor.toStringAsFixed(4));
   }
 
   // convert temp in C to temp in F
@@ -418,5 +426,14 @@ class WeatherState {
   // T: temp in C
   double correctionFactorSAE(double p, double pv, double temp) {
     return ((p - pv) / (0.990 - 0.013)) * pow(302.4 / (temp + 273.15), 0.5);
+  }
+
+  // correction factor SAE J1349 (taken from https://wahiduddin.net/calc/cf.htm)
+  // p: pressure in bar
+  // pv: water vapor partial pressure
+  // T: temp in C
+  double correctionFactorSAEJ1349(double p, double pv, double temp) {
+    return 1.176 * (990 / ((p - pv) * 1000)) * pow((temp + 273.15) / 298, 0.5) -
+        0.176;
   }
 }
